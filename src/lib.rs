@@ -27,6 +27,8 @@ macro_rules! try_rpc {
     })
 }
 
+pub mod io;
+
 mod ipc;
 pub mod client;
 pub mod error;
