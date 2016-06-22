@@ -26,6 +26,33 @@ pub trait RpcCaller {
 
 /// A client maintains a connection to a Swiboe server. It can also serve RPCs that can only be
 /// called by the server.
+///
+///    +-----------------+
+///   +-----------------+|
+///  +-----------------+|+
+///  | function thread |+ -------------------+
+///  +-----------------+                     |
+///                                          |
+///        +--------Client-------------------|------------+
+///        |                                 v            |
+///        | +-------------------+  +-------------------+ |
+///        | |                   |  |                   | |
+///        | | rpc callee thread |  | rpc caller thread | |
+///        | |                   |  |                   | |
+///        | +-------------------+  +-------------------+ |
+///        |           ^                      |           |
+///        |           |                      |           |
+///        |           |                      v           |
+///        |   +---------------+      +---------------+   |
+///        |   |               |      |               |   |
+///        |   | reader thread |      | writer thread |   |
+///        |   |               |      |               |   |
+///        |   +---------------+      +---------------+   |
+///        |           ^                      |           |
+///        +-----------|----------------------|-----------+
+///                    |                      v
+///                   io (Read)              io (Write)
+///
 pub struct Client {
     // Connection to the logic loop.
     rpc_loop_commands: rpc_loop::CommandSender,
