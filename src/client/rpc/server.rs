@@ -3,7 +3,7 @@
 // in the project root for license information.
 
 use ::client::RpcCaller;
-use ::client::rpc_loop;
+use ::client::rpc_caller;
 use ::error::{Result, Error};
 use serde::Serialize;
 use serde_json;
@@ -28,17 +28,17 @@ pub trait Rpc: Send + Sync {
 pub struct Context {
     context: String,
     commands: mpsc::Receiver<Command>,
-    rpc_loop_commands: rpc_loop::CommandSender,
+    rpc_caller_commands: mpsc::Sender<rpc_caller::Command>,
     state: ContextState,
 }
 
 impl Context {
     pub fn new(context: String, commands: mpsc::Receiver<Command>,
-           rpc_loop_commands: rpc_loop::CommandSender) -> Self {
+           rpc_caller_commands: mpsc::Sender<rpc_caller::Command>) -> Self {
         Context {
             context: context,
             commands: commands,
-            rpc_loop_commands: rpc_loop_commands,
+            rpc_caller_commands: rpc_caller_commands,
             state: ContextState::Alive
         }
     }
@@ -75,7 +75,7 @@ impl Context {
             context: self.context.clone(),
             kind: ::rpc::ResponseKind::Partial(serde_json::to_value(args)),
         });
-        Ok(try!(self.rpc_loop_commands.send(rpc_loop::Command::Send(msg))))
+        Ok(try!(self.rpc_caller_commands.send(rpc_caller::Command::Send(msg))))
     }
 
     // NOCOM(#sirver): maybe call is_cancelled?
@@ -93,14 +93,14 @@ impl Context {
             context: self.context.clone(),
             kind: ::rpc::ResponseKind::Last(result),
         });
-        Ok(try!(self.rpc_loop_commands.send(rpc_loop::Command::Send(msg))))
+        Ok(try!(self.rpc_caller_commands.send(rpc_caller::Command::Send(msg))))
     }
 }
 
 impl RpcCaller for Context {
     fn call<T: Serialize>(&mut self, function: &str, args: &T) -> Result<::client::rpc::client::Context> {
         try!(self.check_liveness());
-        Ok(try!(::client::rpc::client::Context::new(self.rpc_loop_commands.clone(), function, args)))
+        Ok(try!(::client::rpc::client::Context::new(self.rpc_caller_commands.clone(), function, args)))
     }
 }
 

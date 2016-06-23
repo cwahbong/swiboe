@@ -2,7 +2,7 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE.txt
 // in the project root for license information.
 
-use ::client::rpc_loop::{Command, CommandSender};
+use ::client::rpc_caller::{Command, CommandSender};
 use ::error::{Error, Result};
 use serde;
 use serde_json;
