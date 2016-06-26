@@ -79,6 +79,46 @@ impl Handler {
             thread_pool: ThreadPool::new(1),
         }
     }
+
+    fn received(&mut self, message: ::ipc::Message) -> Result<()> {
+        match message {
+            ::ipc::Message::RpcCall(rpc_call) => {
+                if let Some(function) = self.remote_procedures.get(&rpc_call.function) {
+                    let (tx, rx) = mpsc::channel();
+                    self.running_rpc_calls.insert(rpc_call.context.clone(), RunningRpc::new(tx));
+                    let command_sender = self.command_sender.clone();
+                    let function = function.clone();
+                    self.thread_pool.execute(move || {
+                        function.call(rpc::server::Context::new(
+                                rpc_call.context, rx, command_sender), rpc_call.args);
+                    })
+                }
+                // NOCOM(#sirver): return an error - though if that has happened the
+                // server messed up too.
+            },
+            ::ipc::Message::RpcCancel(rpc_cancel) => {
+                // NOCOM(#sirver): on drop, the rpcservercontext must delete the entry.
+                if let Some(function) = self.running_rpc_calls.remove(&rpc_cancel.context) {
+                    // The function might be dead already, so we ignore errors.
+                    let _ = function.commands.send(rpc::server::Command::Cancel);
+                }
+            },
+            ipc::Message::RpcResponse(rpc_data) => {
+                // NOCOM(#sirver): if this is a streaming RPC, we should cancel the
+                // RPC.
+                // This will quietly drop any updates on functions that we no longer
+                // know/care about.
+                self.running_function_calls
+                    .get(&rpc_data.context)
+                    .map(|channel| {
+                        // The other side of this channel might not exist anymore - we
+                        // might have dropped the RPC already. Just ignore it.
+                        let _ = channel.send(rpc_data);
+                    });
+            },
+        }
+        Ok(())
+    }
 }
 
 impl spinner::Handler<Command> for Handler {
@@ -90,43 +130,7 @@ impl spinner::Handler<Command> for Handler {
                 Ok(spinner::Command::Continue)
             },
             Command::Received(message) => {
-                match message {
-                    ::ipc::Message::RpcCall(rpc_call) => {
-
-                        if let Some(function) = self.remote_procedures.get(&rpc_call.function) {
-                            let (tx, rx) = mpsc::channel();
-                            self.running_rpc_calls.insert(rpc_call.context.clone(), RunningRpc::new(tx));
-                            let command_sender = self.command_sender.clone();
-                            let function = function.clone();
-                            self.thread_pool.execute(move || {
-                                function.call(rpc::server::Context::new(
-                                        rpc_call.context, rx, command_sender), rpc_call.args);
-                            })
-                        }
-                        // NOCOM(#sirver): return an error - though if that has happened the
-                        // server messed up too.
-                    },
-                    ::ipc::Message::RpcCancel(rpc_cancel) => {
-                        // NOCOM(#sirver): on drop, the rpcservercontext must delete the entry.
-                        if let Some(function) = self.running_rpc_calls.remove(&rpc_cancel.context) {
-                            // The function might be dead already, so we ignore errors.
-                            let _ = function.commands.send(rpc::server::Command::Cancel);
-                        }
-                    },
-                    ipc::Message::RpcResponse(rpc_data) => {
-                        // NOCOM(#sirver): if this is a streaming RPC, we should cancel the
-                        // RPC.
-                        // This will quietly drop any updates on functions that we no longer
-                        // know/care about.
-                        self.running_function_calls
-                            .get(&rpc_data.context)
-                            .map(|channel| {
-                                // The other side of this channel might not exist anymore - we
-                                // might have dropped the RPC already. Just ignore it.
-                                let _ = channel.send(rpc_data);
-                            });
-                    },
-                }
+                try!(self.received(message));
                 Ok(spinner::Command::Continue)
             },
             Command::Send(message) => {
