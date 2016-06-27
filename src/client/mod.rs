@@ -4,7 +4,7 @@
 
 #![allow(deprecated)]
 
-use ::client::conn::Connection;
+use ::client::conn::{Connection, TcpConnector, UnixConnector};
 use ::error::Result;
 use ::ipc;
 
@@ -13,6 +13,7 @@ use ::ipc;
 use ::server::plugin_core::NewRpcRequest;
 
 use serde;
+use std::io;
 use std::net;
 use std::path;
 use std::sync::{mpsc, Mutex};
@@ -34,8 +35,8 @@ pub struct Client {
 
     // The threads dealing with IO. There is a separate thread for reading and one for writing.
     // Both of them block on their IO.
-    read_thread: Option<thread::JoinHandle<()>>,
-    write_thread: Option<thread::JoinHandle<()>>,
+    reader_thread: Option<thread::JoinHandle<()>>,
+    writer_thread: Option<thread::JoinHandle<()>>,
 
     // Function to bring down the connection used for IO. The 'read_thread' and 'write_thread' will
     // both error then and terminate.
@@ -45,42 +46,43 @@ pub struct Client {
 
 impl Client {
     pub fn connect_unix(socket_name: &path::Path) -> Result<Self> {
-        Client::start(::client::conn::UnixConnector::new(socket_name))
+        Client::start(UnixConnector::new(socket_name))
     }
 
     pub fn connect_tcp(address: &net::SocketAddr) -> Result<Self> {
-        Client::start(::client::conn::TcpConnector::new(address))
+        Client::start(TcpConnector::new(address))
+    }
+
+    fn spawn_reader<R: io::Read + Send + 'static>(read: R, commands_tx: mpsc::Sender<rpc_loop::Command>) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            let mut reader = ipc::Reader::new(read);
+            while let Ok(message) = reader.read_message() {
+                let command = rpc_loop::Command::Received(message);
+                if commands_tx.send(command).is_err() {
+                    break;
+                }
+            };
+        })
+    }
+
+    fn spawn_writer<W: io::Write + Send + 'static>(write: W, send_rx: mpsc::Receiver<ipc::Message>) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            let mut writer = ipc::Writer::new(write);
+            while let Ok(message) = send_rx.recv() {
+                writer.write_message(&message).expect("Writing failed");
+            }
+        })
     }
 
     pub fn start<C: ::client::conn::Connector>(connector: C) -> Result<Self> {
         let (commands_tx, commands_rx) = mpsc::channel();
-        let (send_tx, send_rx) = mpsc::channel::<ipc::Message>();
-
+        let (send_tx, send_rx) = mpsc::channel();
         let mut connection = try!(connector.connect());
-
-        let mut reader = ipc::Reader::new(try!(connection.reader()));
-        let reader_commands_tx = commands_tx.clone();
-        let read_thread = thread::spawn(move || {
-            while let Ok(message) = reader.read_message() {
-                let command = rpc_loop::Command::Received(message);
-                if reader_commands_tx.send(command).is_err() {
-                    break;
-                }
-            };
-        });
-
-        let mut writer = ipc::Writer::new(try!(connection.writer()));
-        let write_thread = thread::spawn(move || {
-            while let Ok(message) = send_rx.recv() {
-                writer.write_message(&message).expect("Writing failed");
-            }
-        });
-
         Ok(Client {
             rpc_loop_commands: commands_tx.clone(),
-            rpc_loop_thread: Some(rpc_loop::spawn(commands_rx, commands_tx, send_tx)),
-            read_thread: Some(read_thread),
-            write_thread: Some(write_thread),
+            rpc_loop_thread: Some(rpc_loop::spawn(commands_rx, commands_tx.clone(), send_tx)),
+            reader_thread: Some(Self::spawn_reader(try!(connection.reader()), commands_tx)),
+            writer_thread: Some(Self::spawn_writer(try!(connection.writer()), send_rx)),
             shutdown_func: try!(connection.shutdown_func()),
         })
     }
@@ -123,11 +125,11 @@ impl Drop for Client {
 
         (self.shutdown_func)();
 
-        if let Some(thread) = self.write_thread.take() {
-            thread.join().expect("Joining write_thread failed.");
+        if let Some(thread) = self.writer_thread.take() {
+            thread.join().expect("Joining writer_thread failed.");
         }
-        if let Some(thread) = self.read_thread.take() {
-            thread.join().expect("Joining read_thread failed.");
+        if let Some(thread) = self.reader_thread.take() {
+            thread.join().expect("Joining reader_thread failed.");
         }
     }
 }
