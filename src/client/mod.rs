@@ -4,6 +4,7 @@
 
 #![allow(deprecated)]
 
+use ::client::conn::Connection;
 use ::error::Result;
 use ::ipc;
 
@@ -12,12 +13,10 @@ use ::ipc;
 use ::server::plugin_core::NewRpcRequest;
 
 use serde;
-use std::io;
-use std::net::{self, TcpStream};
+use std::net;
 use std::path;
 use std::sync::{mpsc, Mutex};
 use std::thread;
-use unix_socket::UnixStream;
 
 /// An abstraction that can call remove RPCs.
 pub trait RpcCaller {
@@ -40,36 +39,28 @@ pub struct Client {
 
     // Function to bring down the connection used for IO. The 'read_thread' and 'write_thread' will
     // both error then and terminate.
-    shutdown_socket_func: Box<Fn() -> ()>,
+    shutdown_func: Box<Fn() -> ()>,
 }
 
 
 impl Client {
     pub fn connect_unix(socket_name: &path::Path) -> Result<Self> {
-        let writer_stream = try!(UnixStream::connect(&socket_name));
-        let reader_stream = try!(writer_stream.try_clone());
-        let shutdown_stream = try!(writer_stream.try_clone());
-        Ok(Client::common_connect(reader_stream, writer_stream, Box::new(move || {
-            let _ = shutdown_stream.shutdown(net::Shutdown::Read);
-        })))
+        Client::start(::client::conn::UnixConnector::new(socket_name))
     }
 
     pub fn connect_tcp(address: &net::SocketAddr) -> Result<Self> {
-        let writer_stream = try!(TcpStream::connect(address));
-        let reader_stream = try!(writer_stream.try_clone());
-        let shutdown_stream = try!(writer_stream.try_clone());
-        Ok(Client::common_connect(reader_stream, writer_stream, Box::new(move || {
-            let _ = shutdown_stream.shutdown(net::Shutdown::Read);
-        })))
+        Client::start(::client::conn::TcpConnector::new(address))
     }
 
-    fn common_connect<Reader: io::Read + Send + 'static, Writer: io::Write + Send + 'static>(reader_stream: Reader, writer_stream: Writer, shutdown_func: Box<Fn() -> ()>) -> Self {
+    pub fn start<C: ::client::conn::Connector>(connector: C) -> Result<Self> {
         let (commands_tx, commands_rx) = mpsc::channel();
         let (send_tx, send_rx) = mpsc::channel::<ipc::Message>();
 
+        let mut connection = try!(connector.connect());
+
+        let mut reader = ipc::Reader::new(try!(connection.reader()));
         let reader_commands_tx = commands_tx.clone();
         let read_thread = thread::spawn(move || {
-            let mut reader = ipc::Reader::new(reader_stream);
             while let Ok(message) = reader.read_message() {
                 let command = rpc_loop::Command::Received(message);
                 if reader_commands_tx.send(command).is_err() {
@@ -78,20 +69,20 @@ impl Client {
             };
         });
 
+        let mut writer = ipc::Writer::new(try!(connection.writer()));
         let write_thread = thread::spawn(move || {
-            let mut writer = ipc::Writer::new(writer_stream);
             while let Ok(message) = send_rx.recv() {
                 writer.write_message(&message).expect("Writing failed");
             }
         });
 
-        Client {
+        Ok(Client {
             rpc_loop_commands: commands_tx.clone(),
             rpc_loop_thread: Some(rpc_loop::spawn(commands_rx, commands_tx, send_tx)),
             read_thread: Some(read_thread),
             write_thread: Some(write_thread),
-            shutdown_socket_func: shutdown_func,
-        }
+            shutdown_func: try!(connection.shutdown_func()),
+        })
     }
 
     pub fn new_rpc(&mut self, name: &str, rpc: Box<rpc::server::Rpc>) -> Result<()> {
@@ -130,7 +121,7 @@ impl Drop for Client {
             thread.join().expect("Joining rpc_loop_thread failed.");
         }
 
-        (self.shutdown_socket_func)();
+        (self.shutdown_func)();
 
         if let Some(thread) = self.write_thread.take() {
             thread.join().expect("Joining write_thread failed.");
@@ -172,4 +163,5 @@ impl RpcCaller for ThinClient {
 
 mod rpc_loop;
 
+pub mod conn;
 pub mod rpc;
