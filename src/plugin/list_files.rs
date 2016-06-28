@@ -4,7 +4,6 @@
 
 use ::client;
 use ::client::RpcCaller;
-use ::error::Result;
 use ::rpc;
 use ::plugin;
 use serde_json;
@@ -103,18 +102,12 @@ impl client::rpc::server::Rpc for ListFiles {
     }
 }
 
-pub struct Plugin {
-    _client: client::Client,
-}
+pub struct Core;
 
-impl Plugin {
-    pub fn new(mut client: client::Client) -> Result<Self> {
-        let thin_client = Arc::new(RwLock::new(try!(client.clone())));
-        try!(plugin::register_rpc(&mut client, rpc_map! {
-            "list_files" => ListFiles { client: thin_client.clone() },
-        }));
-        Ok(Plugin {
-            _client: client,
-        })
+impl plugin::Core for Core {
+    fn rpc_map(&self, thin_client: client::ThinClient) -> plugin::RpcMap {
+        rpc_map! {
+            "list_files" => ListFiles { client: Arc::new(RwLock::new(thin_client)) },
+        }
     }
 }

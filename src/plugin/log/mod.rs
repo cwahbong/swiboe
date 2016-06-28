@@ -2,26 +2,20 @@
 // Licensed under the Apache License, Version 2.0. See LICENSE.txt
 // in the project root for license information.
 use ::client;
-use ::error::Result;
 use ::plugin;
 use time;
 
 
-pub struct Plugin {
-    _client: client::Client,
-}
+pub struct Core;
 
-impl Plugin {
-    pub fn new(mut client: client::Client) -> Result<Self> {
-        try!(plugin::register_rpc(&mut client, rpc_map! {
+impl plugin::Core for Core {
+    fn rpc_map(&self, _thin_client: client::ThinClient) -> plugin::RpcMap {
+        rpc_map! {
             "log.debug" => debug::Rpc,
             "log.info" => info::Rpc,
             "log.warn" => warn::Rpc,
             "log.error" => error::Rpc,
-        }));
-        Ok(Plugin{
-            _client: client,
-        })
+        }
     }
 }
 

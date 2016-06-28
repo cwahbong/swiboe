@@ -25,6 +25,23 @@ pub fn register_rpc(client: &mut client::Client, map: RpcMap) -> Result<()> {
     Ok(())
 }
 
+pub trait Core {
+    fn rpc_map(&self, thin_client: client::ThinClient) -> RpcMap;
+}
+
+pub struct Plugin {
+    _client: client::Client,
+}
+
+impl Plugin {
+    pub fn start<Conn: client::conn::Connector, Co: Core>(connector: &Conn, core: Co) -> Result<Self> {
+        let mut client = try!(client::Client::start(connector));
+        let thin_client = try!(client.clone());
+        try!(register_rpc(&mut client, core.rpc_map(thin_client)));
+        Ok(Plugin { _client: client })
+    }
+}
+
 pub mod buffer;
 pub mod list_files;
 pub mod log;

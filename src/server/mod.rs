@@ -22,9 +22,7 @@ pub struct Server {
     ipc_bridge_commands: mio::Sender<ipc_bridge::Command>,
     swiboe_thread: Option<thread::JoinHandle<()>>,
     event_loop_thread: Option<thread::JoinHandle<()>>,
-    buffer_plugin: Option<plugin::buffer::Plugin>,
-    list_files_plugin: Option<plugin::list_files::Plugin>,
-    log_plugin: Option<plugin::log::Plugin>,
+    plugins: Vec<plugin::Plugin>,
 }
 
 impl Server {
@@ -38,11 +36,9 @@ impl Server {
             tcp_addresses: tcp_addresses.iter().map(|slice| slice.to_string()).collect(),
             commands: tx.clone(),
             ipc_bridge_commands: event_loop.channel(),
-            buffer_plugin: None,
-            list_files_plugin: None,
-            log_plugin: None,
             swiboe_thread: None,
             event_loop_thread: None,
+            plugins: Vec::new(),
         };
 
         server.swiboe_thread = Some(swiboe::spawn(event_loop.channel(), tx.clone(), rx));
@@ -55,12 +51,13 @@ impl Server {
             event_loop.run(&mut ipc_bridge).expect("Could not start event_loop.");
         }));
 
-        server.buffer_plugin = Some(try!(plugin::buffer::Plugin::new(
-                    try!(client::Client::connect_unix(&server.unix_domain_socket_name)))));
-        server.list_files_plugin = Some(try!(plugin::list_files::Plugin::new(
-                    try!(client::Client::connect_unix(&server.unix_domain_socket_name)))));
-        server.log_plugin = Some(try!(plugin::log::Plugin::new(
-                    try!(client::Client::connect_unix(&server.unix_domain_socket_name)))));
+        {
+            let conn = client::conn::UnixConnector::new(&server.unix_domain_socket_name);
+            server.plugins.push(try!(plugin::Plugin::start(&conn, plugin::list_files::Core)));
+            server.plugins.push(try!(plugin::Plugin::start(&conn, plugin::buffer::Core)));
+            server.plugins.push(try!(plugin::Plugin::start(&conn, plugin::log::Core)));
+        }
+
         Ok(server)
     }
 

@@ -45,14 +45,14 @@ pub struct Client {
 
 impl Client {
     pub fn connect_unix(socket_name: &path::Path) -> Result<Self> {
-        Client::start(::client::conn::UnixConnector::new(socket_name))
+        Client::start(&::client::conn::UnixConnector::new(socket_name))
     }
 
     pub fn connect_tcp(address: &net::SocketAddr) -> Result<Self> {
-        Client::start(::client::conn::TcpConnector::new(address))
+        Client::start(&::client::conn::TcpConnector::new(address))
     }
 
-    pub fn start<C: ::client::conn::Connector>(connector: C) -> Result<Self> {
+    pub fn start<C: ::client::conn::Connector>(connector: &C) -> Result<Self> {
         let (commands_tx, commands_rx) = mpsc::channel();
         let (send_tx, send_rx) = mpsc::channel::<ipc::Message>();
 

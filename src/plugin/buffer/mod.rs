@@ -3,30 +3,21 @@
 // in the project root for license information.
 
 use ::client;
-use ::error::Result;
 use ::plugin;
 use std::sync::{RwLock, Arc};
 
-pub struct Plugin {
-    _client: client::Client,
-    _buffers: Arc<RwLock<base::BuffersManager>>,
-}
+pub struct Core;
 
-impl Plugin {
-    pub fn new(mut client: client::Client) -> Result<Self> {
-        let buffers = Arc::new(RwLock::new(base::BuffersManager::new(try!(client.clone()))));
-        let rpc_map = rpc_map! {
+impl plugin::Core for Core {
+    fn rpc_map(&self, thin_client: client::ThinClient) -> plugin::RpcMap {
+        let buffers = Arc::new(RwLock::new(base::BuffersManager::new(thin_client)));
+        rpc_map! {
             "buffer.new" => new::Rpc { buffers: buffers.clone() },
             "buffer.delete" => delete::Rpc { buffers: buffers.clone() },
             "buffer.get_content" => get_content::Rpc { buffers: buffers.clone() },
             "buffer.open" => open::Rpc { buffers: buffers.clone() },
             "buffer.list" => list::Rpc { buffers: buffers.clone() },
-        };
-        try!(plugin::register_rpc(&mut client, rpc_map));
-        Ok(Plugin{
-            _client: client,
-            _buffers: buffers,
-        })
+        }
     }
 }
 
